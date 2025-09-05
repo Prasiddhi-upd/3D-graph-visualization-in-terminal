@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 use winit::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
@@ -131,4 +132,25 @@ fn main() {
     window.set_title("Triangle");
     env_logger::init();
     pollster::block_on(run(event_loop, window));
+=======
+use std::env;
+use std::fs;
+use dot_parser_delta_computator::{parse_graph, compute_delta};
+
+fn main() {
+    let args: Vec<String> = env::args().collect();
+    if args.len() != 3 {
+        eprintln!("Usage: {} <file1.dot> <file2.dot>", args[0]);
+        std::process::exit(1);
+    }
+
+    let dot1 = fs::read_to_string(&args[1]).expect("Failed to read first DOT file");
+    let dot2 = fs::read_to_string(&args[2]).expect("Failed to read second DOT file");
+
+    let g1 = parse_graph(&dot1).expect("Parse error in file1");
+    let g2 = parse_graph(&dot2).expect("Parse error in file2");
+    let delta = compute_delta(&g1, &g2);
+
+    println!("{}", serde_json::to_string_pretty(&delta).unwrap());
+>>>>>>> fab47b4 (Add dot_parser_delta_computator project)
 }

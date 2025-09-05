@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>DOT Parser Delta Demo</title>
+</head>
+<body>
+  <h1>DOT Parser Delta Demo</h1>
+  <pre id="output"></pre>
+
+  <script type="module">
+    import init, { DotParser } from "./pkg/dot_parser_delta_computator.js";
+
+    async function run() {
+      await init();
+      const parser = new DotParser();
+
+      const dot1 = `digraph { a -> b; }`;
+      const dot2 = `digraph { a -> b; b -> c; }`;
+
+      // Parse single graphs
+      console.log("Parse dot1:", parser.parse(dot1));
+      console.log("Parse dot2:", parser.parse(dot2));
+
+      // Delta
+      console.log("Delta:", parser.delta(dot1, dot2));
+
+      // Show on page
+      document.getElementById("output").textContent =
+        "Delta Result:\n" + parser.delta(dot1, dot2);
+    }
+
+    run();
+  </script>
+</body>
+</html>
