@@ -10,6 +10,7 @@ pub struct App<'a> {
 
 impl<'a> App<'a> {
     pub async fn new(window: &'a Window) -> Result<Self> {
+        println!("=== App::new() called ===");
         let size = window.inner_size();
         let aspect = size.width as f32 / size.height as f32;
 

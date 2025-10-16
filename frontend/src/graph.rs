@@ -1,4 +1,5 @@
 use glam::Vec3;
+use rand::Rng;
 
 #[derive(Clone, Copy)]
 pub struct Node {
@@ -19,17 +20,63 @@ pub struct Graph {
 
 impl Graph {
     pub fn new_demo() -> Self {
-        Self {
-            nodes: vec![
-                Node { position: Vec3::new(0.0, 0.5, 0.0), color: [1.0, 0.0, 0.0] },  // Red
-                Node { position: Vec3::new(-0.5, -0.5, 0.0), color: [0.0, 1.0, 0.0] }, // Green
-                Node { position: Vec3::new(0.5, -0.5, 0.0), color: [0.0, 0.0, 1.0] },  // Blue
-            ],
-            edges: vec![
-                Edge { from: 0, to: 1 },
-                Edge { from: 1, to: 2 },
-                Edge { from: 2, to: 0 },
-            ],
+        println!("Creating NEW graph with clusters!");
+        let mut rng = rand::thread_rng();
+
+        // === CLUSTER 1 (centered near -1.0, 0.0, 0.0) ===
+        let cluster1_center = Vec3::new(-1.0, 0.0, 0.0);
+        let cluster1_nodes = (0..10)
+            .map(|_| Node {
+                position: cluster1_center
+                    + Vec3::new(
+                        rng.gen_range(-0.4..0.4),
+                        rng.gen_range(-0.4..0.4),
+                        rng.gen_range(-0.4..0.4),
+                    ),
+                color: [1.0, rng.gen_range(0.2..0.5), rng.gen_range(0.2..0.5)], // reddish tones
+            })
+            .collect::<Vec<_>>();
+
+        // === CLUSTER 2 (centered near +1.0, 0.0, 0.0) ===
+        let cluster2_center = Vec3::new(1.0, 0.0, 0.0);
+        let cluster2_nodes = (0..15)
+            .map(|_| Node {
+                position: cluster2_center
+                    + Vec3::new(
+                        rng.gen_range(-0.4..0.4),
+                        rng.gen_range(-0.4..0.4),
+                        rng.gen_range(-0.4..0.4),
+                    ),
+                color: [rng.gen_range(0.2..0.5), 0.8, rng.gen_range(0.2..0.5)], // greenish tones
+            })
+            .collect::<Vec<_>>();
+
+        // Combine both clusters
+        let mut nodes = Vec::new();
+        nodes.extend(cluster1_nodes);
+        nodes.extend(cluster2_nodes);
+
+        // === Create random edges within each cluster ===
+        let mut edges = Vec::new();
+
+        // Edges for cluster 1 (more connected)
+        for _ in 0..25 {
+            let a = rng.gen_range(0..10);
+            let b = rng.gen_range(0..10);
+            if a != b {
+                edges.push(Edge { from: a, to: b });
+            }
         }
+
+        // Edges for cluster 2 (slightly denser)
+        for _ in 0..35 {
+            let a = rng.gen_range(10..25);
+            let b = rng.gen_range(10..25);
+            if a != b {
+                edges.push(Edge { from: a, to: b });
+            }
+        }
+
+        Self { nodes, edges }
     }
 }
