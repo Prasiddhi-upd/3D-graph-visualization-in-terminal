@@ -43,14 +43,14 @@ fn main() {
                 WindowEvent::Resized(new_size) => {
                     app.resize(new_size.width, new_size.height);
                 }
-                WindowEvent::KeyboardInput { event, .. } => {
-                    input_state.on_keyboard(&event, app.get_camera_mut());
-                }
                 WindowEvent::CursorMoved { position, .. } => {
                     input_state.on_cursor_move(position, app.get_camera_mut());
                 }
-                WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
-                    input_state.on_mouse(state);
+                WindowEvent::MouseInput { state, button, .. } => {
+                    input_state.on_mouse(button, state);
+                }
+                WindowEvent::MouseWheel { delta, .. } => {
+                    input_state.on_scroll(&delta, app.get_camera_mut());
                 }
                 WindowEvent::RedrawRequested => {
                     if let Err(e) = app.render() {

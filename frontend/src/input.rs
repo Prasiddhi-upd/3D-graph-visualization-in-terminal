@@ -1,51 +1,64 @@
 use winit::{
     dpi::PhysicalPosition,
-    event::{ElementState, KeyEvent},
-    keyboard::KeyCode,
+    event::{ElementState, MouseButton},
 };
-use glam::{Mat4, Vec3};
-
 use crate::camera::Camera;
+use winit::event::MouseScrollDelta;
 
 pub struct InputState {
-    pub mouse_pressed: bool,
-    pub last_mouse_pos: (f64, f64),
+    pub left_mouse_pressed: bool,
+    pub middle_mouse_pressed: bool,
+    pub last_mouse_pos: Option<(f64, f64)>, // Option to track initial press
 }
 
 impl InputState {
-    pub fn on_keyboard(&mut self, event: &KeyEvent, camera: &mut Camera) {
-        if event.state == ElementState::Pressed {
-            match event.physical_key {
-                winit::keyboard::PhysicalKey::Code(KeyCode::ArrowUp) => camera.zoom(0.1),
-                winit::keyboard::PhysicalKey::Code(KeyCode::ArrowDown) => camera.zoom(-0.1),
-                _ => {}
+    /// Handle mouse wheel zoom
+    pub fn on_scroll(&mut self, delta: &MouseScrollDelta, camera: &mut Camera) {
+        let scroll_amount = match delta {
+            MouseScrollDelta::LineDelta(_, y) => *y as f32 * 0.1, 
+            MouseScrollDelta::PixelDelta(pos) => pos.y as f32 * 0.001, 
+        };
+
+        camera.zoom(-scroll_amount);
+    }
+
+    /// Handle cursor movement for rotation/panning
+    pub fn on_cursor_move(&mut self, position: PhysicalPosition<f64>, camera: &mut Camera) {
+        if let Some((last_x, last_y)) = self.last_mouse_pos {
+            let dx = (position.x - last_x) as f32;
+            let dy = (position.y - last_y) as f32;
+
+            if self.left_mouse_pressed {
+                camera.rotate(dx, dy);
+            } else if self.middle_mouse_pressed {
+                camera.pan(dx, dy);
             }
         }
+        self.last_mouse_pos = Some((position.x, position.y));
     }
 
-    pub fn on_cursor_move(&mut self, position: PhysicalPosition<f64>, camera: &mut Camera) {
-        if self.mouse_pressed {
-            let dx = (position.x - self.last_mouse_pos.0) as f32 * 0.01;
-            let dy = (position.y - self.last_mouse_pos.1) as f32 * 0.01;
-
-            let mut pos = camera.view.inverse().transform_point3(Vec3::ZERO);
-            pos.x += dx;
-            pos.y -= dy;
-            camera.view = Mat4::look_at_rh(pos, Vec3::ZERO, Vec3::Y);
+    /// Handle mouse button presses
+    pub fn on_mouse(&mut self, button: MouseButton, state: ElementState) {
+        let pressed = state == ElementState::Pressed;
+        match button {
+            MouseButton::Left => self.left_mouse_pressed = pressed,
+            MouseButton::Middle => self.middle_mouse_pressed = pressed,
+            _ => {}
         }
-        self.last_mouse_pos = (position.x, position.y);
-    }
 
-    pub fn on_mouse(&mut self, state: ElementState) {
-        self.mouse_pressed = state == ElementState::Pressed;
+        // Reset last_mouse_pos on initial press to avoid huge jump
+        if pressed {
+            self.last_mouse_pos = None;
+        }
     }
 }
 
 impl Default for InputState {
     fn default() -> Self {
         Self {
-            mouse_pressed: false,
-            last_mouse_pos: (0.0, 0.0),
+            left_mouse_pressed: false,
+            middle_mouse_pressed: false,
+            last_mouse_pos: None,
         }
     }
 }

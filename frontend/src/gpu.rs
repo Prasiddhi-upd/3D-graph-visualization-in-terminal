@@ -5,7 +5,6 @@ use std::fs;
 
 use crate::{camera::Camera, graph::Graph};
 
-// Vertex structures
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct Vertex {
@@ -13,7 +12,6 @@ struct Vertex {
     color: [f32; 4],
 }
 
-// Uniform buffer for camera
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct CameraUniform {
@@ -25,20 +23,25 @@ pub struct GpuState<'a> {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub config: wgpu::SurfaceConfiguration,
-    
+
+    pub depth_texture: wgpu::Texture,
+    pub depth_view: wgpu::TextureView,
+    pub msaa_texture: wgpu::Texture,
+    pub msaa_view: wgpu::TextureView,
+    pub sample_count: u32,
+
     // Node rendering
     pub node_vertex_buffer: wgpu::Buffer,
     pub node_index_buffer: wgpu::Buffer,
     pub node_num_indices: u32,
     pub node_pipeline: wgpu::RenderPipeline,
-    
-    // Edge rendering  
+
+    // Edge rendering
     pub edge_vertex_buffer: wgpu::Buffer,
     pub edge_index_buffer: wgpu::Buffer,
     pub edge_num_indices: u32,
     pub edge_pipeline: wgpu::RenderPipeline,
-    
-    // Camera uniform
+
     pub camera_uniform: CameraUniform,
     pub camera_buffer: wgpu::Buffer,
     pub camera_bind_group: wgpu::BindGroup,
@@ -58,7 +61,6 @@ impl<'a> GpuState<'a> {
             .await
             .ok_or("No suitable GPU adapters")?;
 
-        // Use more permissive limits for desktop
         let limits = wgpu::Limits::default();
 
         let (device, queue) = adapter
@@ -88,33 +90,69 @@ impl<'a> GpuState<'a> {
         };
         surface.configure(&device, &config);
 
-        // Create camera uniform buffer and bind group
+        let sample_count = 4;
+
+        // Depth texture
+        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Depth Texture"),
+            size: wgpu::Extent3d {
+                width: config.width,
+                height: config.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth24Plus,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // MSAA texture
+        let msaa_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("MSAA Texture"),
+            size: wgpu::Extent3d {
+                width: config.width,
+                height: config.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count,
+            dimension: wgpu::TextureDimension::D2,
+            format: config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let msaa_view = msaa_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Camera buffer
         let camera_uniform = CameraUniform {
             view_proj: glam::Mat4::IDENTITY.to_cols_array_2d(),
         };
-
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("camera buffer"),
+            label: Some("Camera Buffer"),
             contents: bytemuck::cast_slice(&[camera_uniform]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("camera bind group layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
+        let camera_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Camera Bind Group Layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
 
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("camera bind group"),
+            label: Some("Camera Bind Group"),
             layout: &camera_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
@@ -122,31 +160,53 @@ impl<'a> GpuState<'a> {
             }],
         });
 
-        // Load shaders from files
-        let node_shader_source = fs::read_to_string("shaders/nodes.wgsl")
-            .map_err(|e| format!("Failed to read node shader: {}", e))?;
-        let edge_shader_source = fs::read_to_string("shaders/edges.wgsl")
-            .map_err(|e| format!("Failed to read edge shader: {}", e))?;
+        // Load shaders
+        let node_shader_source =
+            fs::read_to_string("shaders/nodes.wgsl").map_err(|e| e.to_string())?;
+        let edge_shader_source =
+            fs::read_to_string("shaders/edges.wgsl").map_err(|e| e.to_string())?;
 
         let node_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("node shader"),
+            label: Some("Node Shader"),
             source: wgpu::ShaderSource::Wgsl(node_shader_source.into()),
         });
-
         let edge_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("edge shader"),
+            label: Some("Edge Shader"),
             source: wgpu::ShaderSource::Wgsl(edge_shader_source.into()),
         });
 
-        // Node pipeline
-        let node_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("node pipeline layout"),
-            bind_group_layouts: &[&camera_bind_group_layout],
-            push_constant_ranges: &[],
+        let node_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Node Pipeline Layout"),
+                bind_group_layouts: &[&camera_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+
+        let edge_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Edge Pipeline Layout"),
+                bind_group_layouts: &[&camera_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+
+        // Shared depth and MSAA config
+        let depth_stencil_state = Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth24Plus,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::Less,
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
         });
 
+        let multisample_state = wgpu::MultisampleState {
+            count: sample_count,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
+        };
+
+        // Node pipeline
         let node_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("node pipeline"),
+            label: Some("Node Pipeline"),
             layout: Some(&node_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &node_shader,
@@ -164,24 +224,15 @@ impl<'a> GpuState<'a> {
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[Some(config.format.into())],
             }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: depth_stencil_state.clone(),
+            multisample: multisample_state,
             multiview: None,
         });
 
         // Edge pipeline
-        let edge_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("edge pipeline layout"),
-            bind_group_layouts: &[&camera_bind_group_layout],
-            push_constant_ranges: &[],
-        });
-
         let edge_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("edge pipeline"),
+            label: Some("Edge Pipeline"),
             layout: Some(&edge_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &edge_shader,
@@ -200,38 +251,35 @@ impl<'a> GpuState<'a> {
                 targets: &[Some(config.format.into())],
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
+                topology: wgpu::PrimitiveTopology::LineList, // ✅ Render edges as lines
                 ..Default::default()
             },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
+            depth_stencil: depth_stencil_state,
+            multisample: multisample_state,
             multiview: None,
         });
 
-        // Temporary empty buffers
+        // Empty buffers
         let node_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("node vertex buffer"),
+            label: Some("Node Vertex Buffer"),
             size: 1,
             usage: wgpu::BufferUsages::VERTEX,
             mapped_at_creation: false,
         });
-
         let node_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("node index buffer"),
+            label: Some("Node Index Buffer"),
             size: 1,
             usage: wgpu::BufferUsages::INDEX,
             mapped_at_creation: false,
         });
-
         let edge_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("edge vertex buffer"),
+            label: Some("Edge Vertex Buffer"),
             size: 1,
             usage: wgpu::BufferUsages::VERTEX,
             mapped_at_creation: false,
         });
-
         let edge_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("edge index buffer"),
+            label: Some("Edge Index Buffer"),
             size: 1,
             usage: wgpu::BufferUsages::INDEX,
             mapped_at_creation: false,
@@ -242,6 +290,11 @@ impl<'a> GpuState<'a> {
             device,
             queue,
             config,
+            depth_texture,
+            depth_view,
+            msaa_texture,
+            msaa_view,
+            sample_count,
             node_vertex_buffer,
             node_index_buffer,
             node_num_indices: 0,
@@ -256,223 +309,46 @@ impl<'a> GpuState<'a> {
         })
     }
 
-    pub fn resize(&mut self, width: u32, height: u32) {
-        self.config.width = width.max(1);
-        self.config.height = height.max(1);
-        self.surface.configure(&self.device, &self.config);
-    }
-
-    pub async fn sync_graph(&mut self, graph: &Graph) {
-        // Generate sphere geometry for nodes
-        let (node_vertices, node_indices) = Self::generate_sphere_vertices(graph);
-        self.node_num_indices = node_indices.len() as u32;
-
-        self.node_vertex_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("node vertices"),
-                contents: bytemuck::cast_slice(&node_vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-
-        self.node_index_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("node indices"),
-                contents: bytemuck::cast_slice(&node_indices),
-                usage: wgpu::BufferUsages::INDEX,
-            });
-
-        // Generate cylinder geometry for edges
-        let (edge_vertices, edge_indices) = Self::generate_cylinder_vertices(graph);
-        self.edge_num_indices = edge_indices.len() as u32;
-
-        self.edge_vertex_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("edge vertices"),
-                contents: bytemuck::cast_slice(&edge_vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-
-        self.edge_index_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("edge indices"),
-                contents: bytemuck::cast_slice(&edge_indices),
-                usage: wgpu::BufferUsages::INDEX,
-            });
-    }
-
-    fn generate_sphere_vertices(graph: &Graph) -> (Vec<Vertex>, Vec<u32>) {
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
-        let radius = 0.1;
-        let segments = 16; // Smooth spheres
-
-        for node in &graph.nodes {
-            let base_index = vertices.len() as u32;
-
-            // Generate sphere vertices using UV sphere method
-            for i in 0..=segments {
-                let theta = (i as f32) * std::f32::consts::PI / (segments as f32);
-                let sin_theta = theta.sin();
-                let cos_theta = theta.cos();
-
-                for j in 0..=segments {
-                    let phi = (j as f32) * 2.0 * std::f32::consts::PI / (segments as f32);
-                    let sin_phi = phi.sin();
-                    let cos_phi = phi.cos();
-
-                    let x = cos_phi * sin_theta;
-                    let y = cos_theta;
-                    let z = sin_phi * sin_theta;
-
-                    vertices.push(Vertex {
-                        position: [
-                            node.position.x + x * radius,
-                            node.position.y + y * radius,
-                            node.position.z + z * radius,
-                        ],
-                        color: [node.color[0], node.color[1], node.color[2], 1.0],
-                    });
-                }
-            }
-
-            // Generate sphere indices
-            for i in 0..segments {
-                for j in 0..segments {
-                    let first = (i * (segments + 1)) + j;
-                    let second = first + segments + 1;
-
-                    // First triangle
-                    indices.push(base_index + first);
-                    indices.push(base_index + second);
-                    indices.push(base_index + first + 1);
-
-                    // Second triangle
-                    indices.push(base_index + first + 1);
-                    indices.push(base_index + second);
-                    indices.push(base_index + second + 1);
-                }
-            }
-        }
-
-        (vertices, indices)
-    }
-
-    fn generate_cylinder_vertices(graph: &Graph) -> (Vec<Vertex>, Vec<u32>) {
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
-        let radius = 0.02;
-        let segments = 8;
-        let edge_color = [0.7, 0.7, 0.7, 1.0];
-
-        for edge in &graph.edges {
-            if let (Some(from), Some(to)) = (graph.nodes.get(edge.from), graph.nodes.get(edge.to)) {
-                let base_index = vertices.len() as u32;
-                let direction = to.position - from.position;
-                let length = direction.length();
-                let unit_dir = direction / length;
-                
-                // Find perpendicular vectors
-                let perp1 = if unit_dir.x.abs() > 0.1 {
-                    glam::Vec3::new(unit_dir.y, -unit_dir.x, 0.0).normalize()
-                } else {
-                    glam::Vec3::new(0.0, unit_dir.z, -unit_dir.y).normalize()
-                };
-                let perp2 = unit_dir.cross(perp1);
-                
-                // Generate cylinder vertices
-                for i in 0..=segments {
-                    let angle = (i as f32) * 2.0 * std::f32::consts::PI / (segments as f32);
-                    let circle_x = radius * angle.cos();
-                    let circle_y = radius * angle.sin();
-                    
-                    let offset = perp1 * circle_x + perp2 * circle_y;
-                    
-                    // Bottom vertex
-                    vertices.push(Vertex {
-                        position: [
-                            from.position.x + offset.x,
-                            from.position.y + offset.y,
-                            from.position.z + offset.z,
-                        ],
-                        color: edge_color,
-                    });
-                    
-                    // Top vertex
-                    vertices.push(Vertex {
-                        position: [
-                            to.position.x + offset.x,
-                            to.position.y + offset.y,
-                            to.position.z + offset.z,
-                        ],
-                        color: edge_color,
-                    });
-                }
-                
-                // Generate cylinder indices
-                for i in 0..segments {
-                    let bottom_left = base_index + i * 2;
-                    let bottom_right = base_index + ((i + 1) % segments) * 2;
-                    let top_left = bottom_left + 1;
-                    let top_right = bottom_right + 1;
-                    
-                    // First triangle
-                    indices.push(bottom_left);
-                    indices.push(bottom_right);
-                    indices.push(top_left);
-                    
-                    // Second triangle
-                    indices.push(top_left);
-                    indices.push(bottom_right);
-                    indices.push(top_right);
-                }
-            }
-        }
-
-        (vertices, indices)
-    }
-
     pub fn render(&mut self, _graph: &Graph, camera: &Camera) -> Result<(), String> {
-        // Update camera uniform
         self.camera_uniform.view_proj = camera.build_view_projection_matrix().to_cols_array_2d();
-        self.queue.write_buffer(
-            &self.camera_buffer,
-            0,
-            bytemuck::cast_slice(&[self.camera_uniform]),
-        );
+        self.queue
+            .write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
 
         let frame = self.surface.get_current_texture().map_err(|e| e.to_string())?;
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("render encoder"),
+            label: Some("Render Encoder"),
         });
 
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("render pass"),
+                label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
+                    view: &self.msaa_view,
+                    resolve_target: Some(&view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.05,
-                            g: 0.05,
-                            b: 0.08,
+                            r: 0.02,
+                            g: 0.03,
+                            b: 0.07,
                             a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
 
-            // Render edges first
             if self.edge_num_indices > 0 {
                 rpass.set_pipeline(&self.edge_pipeline);
                 rpass.set_bind_group(0, &self.camera_bind_group, &[]);
@@ -481,7 +357,6 @@ impl<'a> GpuState<'a> {
                 rpass.draw_indexed(0..self.edge_num_indices, 0, 0..1);
             }
 
-            // Render nodes on top
             if self.node_num_indices > 0 {
                 rpass.set_pipeline(&self.node_pipeline);
                 rpass.set_bind_group(0, &self.camera_bind_group, &[]);
@@ -494,5 +369,268 @@ impl<'a> GpuState<'a> {
         self.queue.submit(Some(encoder.finish()));
         frame.present();
         Ok(())
+    }
+
+    /// === NEW: Geometry Generators ===
+    pub fn generate_sphere_vertices(_graph: &Graph) -> (Vec<Vertex>, Vec<u32>) {
+        let latitude_bands = 12;
+        let longitude_bands = 12;
+        let radius = 0.05;
+
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+
+        for lat in 0..=latitude_bands {
+            let theta = lat as f32 * std::f32::consts::PI / latitude_bands as f32;
+            let sin_theta = theta.sin();
+            let cos_theta = theta.cos();
+
+            for lon in 0..=longitude_bands {
+                let phi = lon as f32 * 2.0 * std::f32::consts::PI / longitude_bands as f32;
+                let sin_phi = phi.sin();
+                let cos_phi = phi.cos();
+
+                let x = cos_phi * sin_theta;
+                let y = cos_theta;
+                let z = sin_phi * sin_theta;
+
+                vertices.push(Vertex {
+                    position: [radius * x, radius * y, radius * z],
+                    color: [0.6, 0.8, 1.0, 1.0],
+                });
+            }
+        }
+
+        for lat in 0..latitude_bands {
+            for lon in 0..longitude_bands {
+                let first = (lat * (longitude_bands + 1) + lon) as u32;
+                let second = first + longitude_bands as u32 + 1;
+                indices.extend_from_slice(&[first, second, first + 1, second, second + 1, first + 1]);
+            }
+        }
+
+        (vertices, indices)
+    }
+
+    pub fn generate_cylinder_vertices(_graph: &Graph) -> (Vec<Vertex>, Vec<u32>) {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+
+        // Make three separate clusters of 20 nodes each, with random edges
+        let clusters = [
+            glam::Vec3::new(-3.0, 0.0, 0.0),
+            glam::Vec3::new(0.0, 0.0, 0.0),
+            glam::Vec3::new(3.0, 0.0, 0.0),
+        ];
+
+        let mut offset = 0u32;
+
+        for &center in &clusters {
+            let mut positions = Vec::new();
+
+            // Create 20 random node positions per cluster
+            for _ in 0..20 {
+                positions.push(center + glam::Vec3::new(
+                    rng.gen_range(-1.0..1.0),
+                    rng.gen_range(-1.0..1.0),
+                    rng.gen_range(-1.0..1.0),
+                ));
+            }
+
+            // Add edges between random nodes in this cluster
+            for _ in 0..30 {
+                let a = rng.gen_range(0..20);
+                let b = rng.gen_range(0..20);
+                if a != b {
+                    let pa = positions[a];
+                    let pb = positions[b];
+
+                    let start_index = vertices.len() as u32;
+
+                    vertices.push(Vertex {
+                        position: pa.to_array(),
+                        color: [0.7, 0.7, 0.7, 1.0],
+                    });
+                    vertices.push(Vertex {
+                        position: pb.to_array(),
+                        color: [0.7, 0.7, 0.7, 1.0],
+                    });
+
+                    // Two vertices form one line segment
+                    indices.push(start_index);
+                    indices.push(start_index + 1);
+                }
+            }
+
+            offset += 20;
+        }
+
+        (vertices, indices)
+    }
+
+}
+
+use rand::Rng;
+use glam::Vec3;
+
+
+impl<'a> GpuState<'a> {
+    /// Synchronize the graph data (nodes and edges) to the GPU buffers.
+    pub fn sync_graph(&mut self, _graph: &Graph) {
+        let mut rng = rand::thread_rng();
+
+        let num_graphs = 7;
+        let nodes_per_graph = 100;
+        let edges_per_graph = 150; // adjust as needed
+
+        let (sphere_vertices, sphere_indices) = Self::generate_sphere_vertices(_graph);
+        let sphere_index_count = sphere_indices.len() as u32;
+
+        let mut all_node_vertices = Vec::new();
+        let mut all_node_indices = Vec::new();
+        let mut all_edge_vertices = Vec::new();
+        let mut all_edge_indices = Vec::new();
+
+        for graph_i in 0..num_graphs {
+            // Random offset for the graph in 3D space
+            let offset = Vec3::new(
+                rng.gen_range(-20.0..20.0),
+                rng.gen_range(-5.0..5.0),
+                rng.gen_range(-20.0..20.0),
+            );
+
+            // Generate random node positions
+            let mut positions = Vec::new();
+            for _ in 0..nodes_per_graph {
+                let pos = Vec3::new(
+                    rng.gen_range(-2.0..2.0),
+                    rng.gen_range(-2.0..2.0),
+                    rng.gen_range(-2.0..2.0),
+                ) + offset;
+                positions.push(pos);
+            }
+
+            // Add nodes (spheres)
+            for pos in &positions {
+                let base_index = all_node_vertices.len() as u32;
+                for v in &sphere_vertices {
+                    let translated = Vertex {
+                        position: [
+                            v.position[0] + pos.x,
+                            v.position[1] + pos.y,
+                            v.position[2] + pos.z,
+                        ],
+                        color: [
+                            0.2 + rng.gen_range(0.0..0.6),
+                            0.4 + rng.gen_range(0.0..0.5),
+                            0.5 + rng.gen_range(0.0..0.5),
+                            1.0,
+                        ],
+                    };
+                    all_node_vertices.push(translated);
+                }
+                for &i in &sphere_indices {
+                    all_node_indices.push(base_index + i);
+                }
+            }
+
+            // Random edges between nodes
+            for _ in 0..edges_per_graph {
+                let a = rng.gen_range(0..nodes_per_graph);
+                let b = rng.gen_range(0..nodes_per_graph);
+                if a == b {
+                    continue;
+                }
+
+                let p1 = positions[a];
+                let p2 = positions[b];
+                let color = [0.8, 0.8, 0.8, 0.3];
+
+                let base_index = all_edge_vertices.len() as u32;
+                all_edge_vertices.push(Vertex {
+                    position: [p1.x, p1.y, p1.z],
+                    color,
+                });
+                all_edge_vertices.push(Vertex {
+                    position: [p2.x, p2.y, p2.z],
+                    color,
+                });
+                all_edge_indices.extend_from_slice(&[base_index, base_index + 1]);
+            }
+        }
+
+        // === Upload node buffers ===
+        self.node_vertex_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Node Vertex Buffer"),
+            contents: bytemuck::cast_slice(&all_node_vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        self.node_index_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Node Index Buffer"),
+            contents: bytemuck::cast_slice(&all_node_indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        self.node_num_indices = all_node_indices.len() as u32;
+
+        // === Upload edge buffers ===
+        self.edge_vertex_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Edge Vertex Buffer"),
+            contents: bytemuck::cast_slice(&all_edge_vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        self.edge_index_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Edge Index Buffer"),
+            contents: bytemuck::cast_slice(&all_edge_indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        self.edge_num_indices = all_edge_indices.len() as u32;
+    }
+
+
+    /// Resize the GPU surface and related textures.
+    pub fn resize(&mut self, new_width: u32, new_height: u32) {
+        if new_width == 0 || new_height == 0 {
+            return;
+        }
+
+        self.config.width = new_width;
+        self.config.height = new_height;
+        self.surface.configure(&self.device, &self.config);
+
+        // Recreate depth and MSAA textures
+        self.depth_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Depth Texture"),
+            size: wgpu::Extent3d {
+                width: new_width,
+                height: new_height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: self.sample_count,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth24Plus,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        self.depth_view = self.depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        self.msaa_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("MSAA Texture"),
+            size: wgpu::Extent3d {
+                width: new_width,
+                height: new_height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: self.sample_count,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        self.msaa_view = self.msaa_texture.create_view(&wgpu::TextureViewDescriptor::default());
     }
 }

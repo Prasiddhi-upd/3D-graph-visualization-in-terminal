@@ -1,0 +1,12 @@
+# Rust
+/target
+**/*.rs.bk
+**/*.rs.old
+Cargo.lock
+
+# Dist/build
+/dist
+
+# OS files
+.DS_Store
+Thumbs.db
