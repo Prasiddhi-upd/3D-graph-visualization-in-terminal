@@ -579,12 +579,12 @@ function updateGraph(newData) {
     const numClusters = new Set(newData.nodes.map(node => node.cluster)).size;
     console.log(`Visualizing ${numClusters} clusters`);
     
-    // Enhanced force configuration
-    Graph.d3Force('charge').strength(-200).distanceMax(1000);
-    Graph.d3Force('center').strength(0.01);
+    // Enhanced force configuration - MODIFIED FOR BETTER SPACING
+    Graph.d3Force('charge').strength(-400).distanceMax(2000); // Double the repulsion and max distance
+    Graph.d3Force('center').strength(0.002); // Reduce center force by 80%
     Graph.d3Force('link')
-        .distance(link => 80 * (1.5 - (link.weight || 0.5)))
-        .strength(link => (link.weight || 0.3) * 0.9);
+        .distance(link => 300 * (2.5 - (link.weight || 0.0005))) // Increase base distance from 80 to 150
+        .strength(link => (link.weight || 0.03) * 0.6); // Reduce link strength by 33%
 
     // Cluster cohesion and separation force
     Graph.d3Force('clusterForce', (alpha) => {
