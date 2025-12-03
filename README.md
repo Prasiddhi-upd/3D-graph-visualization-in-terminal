@@ -25,3 +25,7 @@ Build the project:
 
 ```bash
 cargo build
+
+**Additional Contributions (Group Project Members):**
+- **Brandon Brinkman**
+- **Sudara Subhawickrama**
