@@ -17,6 +17,11 @@ It reads graph definitions from **DOT files**, parses them, and produces an inte
 
 ---
 
+## Additional Contributors
+
+- Brandon Brinkman
+- Sudara Subhawickrama
+
 ## 🛠️ Running the Project
 
 Ensure you have Rust installed from: https://www.rust-lang.org/
@@ -26,6 +31,5 @@ Build the project:
 ```bash
 cargo build
 
-**Additional Contributions (Group Project Members):**
-- **Brandon Brinkman**
-- **Sudara Subhawickrama**
+
+
