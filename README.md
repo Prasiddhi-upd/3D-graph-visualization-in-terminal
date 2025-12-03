@@ -5,7 +5,7 @@ It reads graph definitions from **DOT files**, parses them, and produces an inte
 
 ---
 
-## 🚀 Features
+## Features
 
 - **Parse DOT files** to generate graph structures  
 - **Render 3D graphs in the terminal** using ASCII-based projection  
@@ -25,7 +25,7 @@ It reads graph definitions from **DOT files**, parses them, and produces an inte
 - Brandon Brinkman
 - Sudara Subhawickrama
 
-## 🛠️ Running the Project
+## Running the Project
 
 Ensure you have Rust installed from: https://www.rust-lang.org/
 
