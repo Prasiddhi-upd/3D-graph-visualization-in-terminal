@@ -17,7 +17,7 @@ It reads graph definitions from **DOT files**, parses them, and produces an inte
 
 ---
 
-![3D Graph](assets/Screenshot 2025-12-03 at 12.33.47 PM.png)
+![3D Graph](assets/graph.png)
 
 
 ## Additional Contributors
